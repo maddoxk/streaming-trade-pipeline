@@ -123,10 +123,12 @@ def run_file_stream(spark, tmp_path, batches):
         os.utime(f, (1_000_000 + i, 1_000_000 + i))  # force processing order
 
     final: dict[tuple, dict] = {}
+    emitted: list[tuple] = []  # (batch_id, window_start_s, trade_count), kept for diagnostics
 
-    def collect(batch_df, _batch_id):
+    def collect(batch_df, batch_id):
         for r in to_sink_columns(batch_df).collect():
             final[(r.symbol, r.window_start_s)] = r.asDict()
+            emitted.append((batch_id, r.window_start_s, r.trade_count))
 
     raw = (
         spark.readStream.format("text")
@@ -143,6 +145,17 @@ def run_file_stream(spark, tmp_path, batches):
         .start()
     )
     q.awaitTermination()
+    progress = [
+        (
+            p["batchId"],
+            p["numInputRows"],
+            p["eventTime"],
+            p["stateOperators"][0]["numRowsDroppedByWatermark"],
+        )
+        for p in q.recentProgress
+        if p["stateOperators"]
+    ]
+    print("emitted:", emitted, "progress:", progress)
     return final
 
 
