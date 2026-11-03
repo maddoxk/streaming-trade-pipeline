@@ -114,7 +114,10 @@ def test_sample_data_matches_pandas_reference(spark, sample_files):
 
 
 def run_file_stream(spark, tmp_path, batches):
-    """Feed one file per micro-batch through the real streaming plan; return rows by window."""
+    """Feed one file per micro-batch through the real streaming plan.
+
+    Returns (emitted rows as (window_start_s, trade_count), rows dropped by the watermark).
+    """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
     for i, payloads in enumerate(batches):
@@ -122,13 +125,12 @@ def run_file_stream(spark, tmp_path, batches):
         f.write_text("\n".join(payloads) + "\n")
         os.utime(f, (1_000_000 + i, 1_000_000 + i))  # force processing order
 
-    final: dict[tuple, dict] = {}
-    emitted: list[tuple] = []  # (batch_id, window_start_s, trade_count), kept for diagnostics
+    emitted: list[tuple[int, int]] = []
 
-    def collect(batch_df, batch_id):
-        for r in to_sink_columns(batch_df).collect():
-            final[(r.symbol, r.window_start_s)] = r.asDict()
-            emitted.append((batch_id, r.window_start_s, r.trade_count))
+    def collect(batch_df, _batch_id):
+        emitted.extend(
+            (r.window_start_s, r.trade_count) for r in to_sink_columns(batch_df).collect()
+        )
 
     raw = (
         spark.readStream.format("text")
@@ -145,49 +147,42 @@ def run_file_stream(spark, tmp_path, batches):
         .start()
     )
     q.awaitTermination()
-    progress = [
-        (
-            p["batchId"],
-            p["numInputRows"],
-            p["eventTime"],
-            p["stateOperators"][0]["numRowsDroppedByWatermark"],
-        )
-        for p in q.recentProgress
-        if p["stateOperators"]
-    ]
-    print("emitted:", emitted, "progress:", progress)
-    return final
+    dropped = sum(
+        op["numRowsDroppedByWatermark"] for p in q.recentProgress for op in p["stateOperators"]
+    )
+    return emitted, dropped
 
 
 def test_late_data_behaviour_with_watermark(spark, tmp_path):
     w0 = T0 // 1000  # window starts, epoch seconds
     w9, w10, w11 = (w0 + m * 60 for m in (9, 10, 11))
-    final = run_file_stream(
+    emitted, dropped = run_file_stream(
         spark,
         tmp_path,
         [
             # Batch 0: two trades in minute 0, one in minute 10 -> newest event time T0+605s,
-            # so the watermark becomes T0+575s once this batch has finished.
+            # so the watermark becomes T0+575s once this batch has finished. Minute 0 (ends
+            # at T0+60s) is now closed and is emitted by batch 1.
             [
                 trade_json(trade_id=1, t_ms=T0 + 1_000),
                 trade_json(trade_id=2, t_ms=T0 + 20_000),
                 trade_json(trade_id=3, t_ms=T0 + 605_000),
             ],
-            # Batch 1: a trade for minute 0 (window already closed -> dropped as too late)
-            # and a trade for minute 9 at T0+580s (25 s behind the newest data, but
-            # inside the 30 s allowed lateness -> accepted).
+            # Batch 1: an ordinary on-time trade in minute 10.
+            [trade_json(trade_id=6, t_ms=T0 + 620_000)],
+            # Batch 2: a trade for minute 0 (window already closed -> dropped as too late) and
+            # a trade for minute 9 at T0+580s (25 s behind the newest data, but inside the 30 s
+            # allowed lateness -> accepted). Late rows are judged against the watermark that
+            # was in force when the batch started, i.e. 575 s, hence this ordering.
             [
                 trade_json(trade_id=4, t_ms=T0 + 30_000),
                 trade_json(trade_id=5, t_ms=T0 + 580_000),
             ],
-            # Batch 2: ordinary on-time trade in minute 10.
-            [trade_json(trade_id=6, t_ms=T0 + 620_000)],
             # Batch 3: a trade in minute 11 pushes the watermark to T0+670s, closing 9 and 10.
             [trade_json(trade_id=7, t_ms=T0 + 700_000)],
         ],
     )
-    counts = {k[1]: v["trade_count"] for k, v in final.items()}
-    assert counts[w0] == 2, "late trade 4 must not be added to the closed window"
-    assert counts[w9] == 1, "trade 5 is late but within the watermark delay"
-    assert counts[w10] == 2
-    assert w11 not in counts, "append mode emits a window only after the watermark passes its end"
+    # Every closed window is emitted exactly once, with the late trade excluded.
+    assert sorted(emitted) == [(w0, 2), (w9, 1), (w10, 2)]
+    assert dropped == 1
+    assert w11 not in {w for w, _ in emitted}, "window 11 is still open (not past the watermark)"
