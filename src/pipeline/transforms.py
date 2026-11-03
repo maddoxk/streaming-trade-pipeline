@@ -100,7 +100,11 @@ def aggregate_windows(
     tick = F.struct("trade_time_ms", "trade_id", "price", "quantity")
     agg = (
         trades.withWatermark("event_time", watermark)
-        .groupBy("symbol", F.window("event_time", window).alias("w"))
+        # Keep the default column name `window`: Spark tags that column with the
+        # watermark metadata, which it needs for late-data dropping and state
+        # eviction. (Aliasing it loses the tag and the watermark silently does nothing;
+        # tests/test_transforms_spark.py::test_late_data_behaviour_with_watermark covers this.)
+        .groupBy("symbol", F.window("event_time", window))
         .agg(
             F.collect_list(tick).alias("unsorted_ticks"),
             F.max("price").alias("high"),
@@ -114,8 +118,8 @@ def aggregate_windows(
     )
     return agg.select(
         "symbol",
-        F.col("w.start").alias("window_start"),
-        F.col("w.end").alias("window_end"),
+        F.col("window.start").alias("window_start"),
+        F.col("window.end").alias("window_end"),
         F.expr("ticks[0].price").alias("open"),
         "high",
         "low",
