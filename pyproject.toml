@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "streaming-trade-pipeline"
+version = "0.1.0"
+description = "Kafka -> Spark Structured Streaming -> Postgres over public Binance trade data"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "confluent-kafka>=2.3",
+    "psycopg2-binary>=2.9",
+]
+
+[project.optional-dependencies]
+# pyspark is only needed for the stream job and its unit tests (needs Java 17).
+spark = ["pyspark==3.5.3"]
+dev = ["pytest>=8", "ruff>=0.5", "pandas>=2.1", "jsonschema>=4.20"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

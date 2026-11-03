@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/maddoxk/streaming-trade-pipeline/schemas/trade.schema.json",
+  "title": "Trade",
+  "description": "One aggregated trade, as published to the Kafka `trades` topic (key = symbol).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["symbol", "trade_id", "price", "quantity", "trade_time_ms", "is_buyer_maker"],
+  "properties": {
+    "symbol": { "type": "string", "pattern": "^[A-Z0-9]{3,20}$" },
+    "trade_id": { "type": "integer", "minimum": 0 },
+    "price": { "type": "number", "exclusiveMinimum": 0 },
+    "quantity": { "type": "number", "exclusiveMinimum": 0 },
+    "trade_time_ms": { "type": "integer", "description": "Event time, ms since Unix epoch (UTC)", "minimum": 1483228800000, "maximum": 4102444800000 },
+    "is_buyer_maker": { "type": "boolean" }
+  }
+}
