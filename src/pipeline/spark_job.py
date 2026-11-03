@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 
 from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql.streaming import StreamingQueryListener
 
 from pipeline.sink import ensure_schema, upsert_rows
 from pipeline.transforms import (
@@ -42,9 +43,9 @@ def make_batch_writer(pg_dsn: str):
     import psycopg2
 
     def write_batch(batch: DataFrame, batch_id: int) -> None:
-        # Update output mode: the batch holds every window whose aggregate
-        # changed in this trigger. The batch is small (a few rows per symbol),
-        # so collecting to the driver and doing one multi-row upsert is fine.
+        # Append output mode: the batch holds the windows that the watermark just closed.
+        # That is a handful of rows (a few per symbol per trigger), so collecting to the
+        # driver and doing one multi-row upsert is fine.
         rows = [tuple(r) for r in to_sink_columns(batch).collect()]
         if not rows:
             return
@@ -56,6 +57,27 @@ def make_batch_writer(pg_dsn: str):
         print(f"batch {batch_id}: upserted {len(rows)} windows", flush=True)
 
     return write_batch
+
+
+class DroppedLateRows(StreamingQueryListener):
+    """Make late-data handling visible: log how many rows the watermark discarded."""
+
+    def onQueryStarted(self, event):
+        pass
+
+    def onQueryProgress(self, event):
+        dropped = sum(op.numRowsDroppedByWatermark for op in event.progress.stateOperators)
+        if dropped:
+            print(
+                f"WATERMARK_DROPPED {dropped} late rows in batch {event.progress.batchId}",
+                flush=True,
+            )
+
+    def onQueryIdle(self, event):
+        pass
+
+    def onQueryTerminated(self, event):
+        pass
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -76,6 +98,7 @@ def main(argv: list[str] | None = None) -> None:
 
     spark = build_spark()
     spark.sparkContext.setLogLevel("WARN")
+    spark.streams.addListener(DroppedLateRows())
 
     reader = (
         spark.readStream.format("kafka")
@@ -89,7 +112,9 @@ def main(argv: list[str] | None = None) -> None:
 
     bars = aggregate_windows(parse_trades(raw), watermark=a.watermark)
     query = (
-        bars.writeStream.outputMode("update")  # emit a window each time its aggregate changes
+        # Append mode: a window is emitted exactly once, when the watermark passes its end.
+        # (Update mode would emit early partial results but cannot promise to drop late data.)
+        bars.writeStream.outputMode("append")
         .foreachBatch(make_batch_writer(a.pg_dsn))
         .option("checkpointLocation", a.checkpoint)
         .trigger(processingTime=a.trigger)

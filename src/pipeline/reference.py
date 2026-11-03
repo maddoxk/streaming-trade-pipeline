@@ -84,3 +84,15 @@ def diff_bars(
             if abs(x - y) > max(abs_tol, rel_tol * abs(y)):
                 problems.append(f"{k}: {col} {x!r} != {y!r}")
     return problems
+
+
+def closed_windows(bars: pd.DataFrame, max_event_time_ms: int, watermark_ms: int) -> pd.DataFrame:
+    """Bars that an append-mode job with this watermark has emitted once all data is consumed.
+
+    Spark emits a window when watermark >= window end, where watermark = newest
+    event time seen (across all symbols and partitions) minus the allowed lateness.
+    Windows still open at the end of a finite replay are never emitted.
+    """
+    watermark_ms_now = max_event_time_ms - watermark_ms
+    closed = (bars["window_start_s"] + WINDOW_S) * 1000 <= watermark_ms_now
+    return bars[closed].reset_index(drop=True)

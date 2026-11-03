@@ -25,9 +25,10 @@ import pandas as pd
 import psycopg2
 
 from pipeline.producer import make_producer, run
-from pipeline.reference import BAR_COLUMNS, diff_bars, load_csvs, reference_bars
+from pipeline.reference import BAR_COLUMNS, closed_windows, diff_bars, load_csvs, reference_bars
 
 ROOT = Path(__file__).resolve().parent.parent
+WATERMARK_MS = 30_000  # must match --watermark in docker-compose.yml
 DEFAULT_DSN = "postgresql://pipeline:pipeline@localhost:5432/pipeline"
 
 
@@ -80,9 +81,15 @@ def main() -> int:
 
     files = sorted(str(f) for f in (ROOT / "data/sample").glob("*.csv"))
     trades = load_csvs(files)
-    expected = reference_bars(trades)
-    total = len(trades)
-    print(f"expected: {len(expected)} windows, {total} trades from {len(files)} files")
+    all_bars = reference_bars(trades)
+    # Append mode only emits windows the watermark has closed (see docs/DESIGN.md).
+    expected = closed_windows(all_bars, int(trades["trade_time_ms"].max()), WATERMARK_MS)
+    total = int(expected["trade_count"].sum())
+    n_sent = len(trades)
+    print(
+        f"{n_sent} trades -> {len(all_bars)} windows; {len(expected)} closed by the watermark "
+        f"({total} trades) are expected in Postgres"
+    )
 
     startup_s = wait_for_spark(600)
     print(f"spark ready after {startup_s:.0f}s of waiting")
@@ -97,7 +104,7 @@ def main() -> int:
         seed=1,
     )
     print(f"produced {stats.sent} trades in {stats.elapsed_s:.2f}s ({stats.rate_per_s:,.0f}/s)")
-    if stats.delivery_errors or stats.sent != total:
+    if stats.delivery_errors or stats.sent != n_sent:
         print("producer problem", stats, file=sys.stderr)
         return 1
 
@@ -121,13 +128,15 @@ def main() -> int:
         "label": a.label,
         "passed": not problems,
         "mismatches": problems[:20],
-        "trades": total,
-        "windows": len(expected),
+        "trades_replayed": n_sent,
+        "trades_in_closed_windows": total,
+        "windows_total": len(all_bars),
+        "windows_closed_and_checked": len(expected),
         "speedup": a.speedup,
         "max_disorder_ms": a.max_disorder_ms,
         "producer_publish_rate_per_s": round(stats.rate_per_s, 1),
         "end_to_end_seconds": round(elapsed, 2),
-        "end_to_end_trades_per_s": round(total / elapsed, 1),
+        "end_to_end_trades_per_s": round(n_sent / elapsed, 1),
         "event_time_span_s": int(
             (trades["trade_time_ms"].max() - trades["trade_time_ms"].min()) / 1000
         ),

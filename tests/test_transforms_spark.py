@@ -114,7 +114,7 @@ def test_sample_data_matches_pandas_reference(spark, sample_files):
 
 
 def run_file_stream(spark, tmp_path, batches):
-    """Feed one file per micro-batch through the real streaming plan; return last row per window."""
+    """Feed one file per micro-batch through the real streaming plan; return rows by window."""
     in_dir = tmp_path / "in"
     in_dir.mkdir()
     for i, payloads in enumerate(batches):
@@ -138,7 +138,7 @@ def run_file_stream(spark, tmp_path, batches):
     )
     q = (
         aggregate_windows(parse_trades(raw), watermark="30 seconds")
-        .writeStream.outputMode("update")
+        .writeStream.outputMode("append")
         .foreachBatch(collect)
         .option("checkpointLocation", str(tmp_path / "ckpt"))
         .trigger(availableNow=True)
@@ -161,12 +161,12 @@ def run_file_stream(spark, tmp_path, batches):
 
 def test_late_data_behaviour_with_watermark(spark, tmp_path):
     w0 = T0 // 1000  # window starts, epoch seconds
-    w9, w10 = w0 + 9 * 60, w0 + 10 * 60
+    w9, w10, w11 = (w0 + m * 60 for m in (9, 10, 11))
     final = run_file_stream(
         spark,
         tmp_path,
         [
-            # Batch 0: two trades in minute 0, one in minute 10 -> max event time T0+605s,
+            # Batch 0: two trades in minute 0, one in minute 10 -> newest event time T0+605s,
             # so the watermark becomes T0+575s once this batch has finished.
             [
                 trade_json(trade_id=1, t_ms=T0 + 1_000),
@@ -182,9 +182,12 @@ def test_late_data_behaviour_with_watermark(spark, tmp_path):
             ],
             # Batch 2: ordinary on-time trade in minute 10.
             [trade_json(trade_id=6, t_ms=T0 + 620_000)],
+            # Batch 3: a trade in minute 11 pushes the watermark to T0+670s, closing 9 and 10.
+            [trade_json(trade_id=7, t_ms=T0 + 700_000)],
         ],
     )
     counts = {k[1]: v["trade_count"] for k, v in final.items()}
     assert counts[w0] == 2, "late trade 4 must not be added to the closed window"
     assert counts[w9] == 1, "trade 5 is late but within the watermark delay"
     assert counts[w10] == 2
+    assert w11 not in counts, "append mode emits a window only after the watermark passes its end"

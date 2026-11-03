@@ -2,7 +2,7 @@ import math
 
 import pandas as pd
 
-from pipeline.reference import diff_bars, load_csvs, reference_bars
+from pipeline.reference import closed_windows, diff_bars, load_csvs, reference_bars
 
 T0 = 1_717_425_000_000  # minute-aligned
 
@@ -68,3 +68,14 @@ def load_csvs_small():
             ("BTCUSDT", 4, 98.0, 2.0, T0 + 62_000),
         ]
     )
+
+
+def test_closed_windows_follow_the_watermark():
+    bars = reference_bars(load_csvs_small())  # windows [T0, T0+60s) and [T0+60s, T0+120s)
+    newest = T0 + 62_000
+    # watermark = newest - 30 s = T0+32 s: neither window has ended yet
+    assert len(closed_windows(bars, newest, 30_000)) == 0
+    # watermark = T0+62 s - 1 s = T0+61 s: first window (end T0+60 s) is closed
+    assert len(closed_windows(bars, newest, 1_000)) == 1
+    # a window closes exactly when watermark == window end
+    assert len(closed_windows(bars, T0 + 60_000, 0)) == 1
