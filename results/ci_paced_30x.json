@@ -1,0 +1,30 @@
+{
+  "label": "paced_30x",
+  "passed": true,
+  "mismatches": [],
+  "trades_replayed": 54890,
+  "trades_in_closed_windows": 53938,
+  "windows_total": 30,
+  "windows_closed_and_checked": 28,
+  "speedup": 30.0,
+  "max_disorder_ms": 5000,
+  "producer_publish_rate_per_s": 1829.3,
+  "end_to_end_seconds": 32.25,
+  "end_to_end_trades_per_s": 1702.1,
+  "event_time_span_s": 899,
+  "result_latency_ms": {
+    "definition": "Postgres updated_at of the final upsert minus Kafka timestamp of the newest trade in that window",
+    "p50": 4395.7,
+    "p95": 12318.9,
+    "max": 13029.6
+  },
+  "environment": {
+    "platform": "Linux-7.0.0-1019-azure-x86_64-with-glibc2.43",
+    "cpu_count": 2,
+    "github_runner_os": "Linux",
+    "github_image": "20261101.186.1",
+    "kafka": "apache/kafka:3.8.0 (single broker, KRaft)",
+    "spark": "pyspark 3.5.3, local[2], 1 s trigger, shuffle partitions 2",
+    "postgres": "postgres:16"
+  }
+}
