@@ -29,7 +29,7 @@ Needs Docker (compose v2) and Python 3.10+.
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"                 # producer, reference, tests
-docker compose up -d --build            # Kafka, Postgres, Spark job (first build downloads ~1 GB)
+docker compose up -d --build            # Kafka, Postgres, Spark job
 python -m pipeline.producer --files data/sample/BTCUSDT.csv data/sample/ETHUSDT.csv \
     --speedup 30 --max-disorder-ms 5000
 python -m pipeline.report --dsn postgresql://pipeline:pipeline@localhost:5432/pipeline
@@ -40,8 +40,8 @@ Try the producer without Kafka: `python -m pipeline.producer --files data/sample
 Tests: `pip install -e ".[dev,spark]"` (Spark tests need Java 17), then `pytest`. Postgres tests run when
 `PG_DSN` is set. The compose credentials are throwaway local values.
 
-Note: with the sample, the final ~1.5 minutes of event time are not emitted (windows still open when the
-data ends, see DESIGN.md section 4); 28 of 30 windows appear in Postgres.
+Note: with the sample, the last window of each symbol (14:44) is not emitted because it is still open when
+the data ends (see DESIGN.md section 4); 28 of 30 windows appear in Postgres.
 
 ## Measured results
 

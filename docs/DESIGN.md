@@ -72,7 +72,8 @@ windows already finalized are dropped.
   `test_late_data_behaviour_with_watermark` caught this: in update mode a trade for a window that was long
   closed was still aggregated. Append mode emits each window exactly once, after it closes, and drops late
   rows deterministically. The price: no partial results, and the windows still open when a finite replay
-  ends (the last ~1 minute plus the 30 s delay) are never emitted. The e2e check therefore compares
+  ends (any window whose end is less than 30 s of event time before the newest trade) are never
+  emitted; for the sample that is the last minute, 14:44, of each symbol. The e2e check therefore compares
   only the windows the watermark has closed (`reference.closed_windows`).
 - **Subtle semantics, verified in CI**: late rows in batch N are judged against the watermark that was in
   force when batch N *started* (the one computed from batch N-1), so the test must put the late row in a
